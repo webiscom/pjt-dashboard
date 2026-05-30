@@ -490,7 +490,7 @@ export default function WBSDashboard() {
         <section className="proj reveal" aria-labelledby="projTitle">
           <div>
             <h1 className="proj-title" id="projTitle">
-              ECS 공정 관리 <span className="grad">WBS</span>
+              프로젝트 관리 <span className="grad">WBS</span>
             </h1>
             <div className="proj-meta">
               <span><b>ECS_GANTT_TASK</b></span>
