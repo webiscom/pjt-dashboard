@@ -460,7 +460,7 @@ export default function WBSDashboard() {
         <div className="top-inner">
           <div className="brand" aria-label="Atlas WBS">
             <div className="brand-mark" aria-hidden="true"></div>
-            <span>WBS<span className="brand-sub"></span></span>
+            <a href="/"><span>WBS<span className="brand-sub"></span></span></a>
           </div>
           <div className="top-right">
             <span className="pill"><span className="dot"></span>참여자</span>
