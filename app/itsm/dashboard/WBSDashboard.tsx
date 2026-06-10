@@ -678,14 +678,14 @@ export default function WBSDashboard({ projNo: initialProjNo = '' }: WBSDashboar
               프로젝트 관리 <span className="grad">WBS</span>
             </h1>
             <div className="proj-meta">
-              <span><b>ECS_GANTT_TASK</b></span>
+              <span><b>프로젝트 TASK</b></span>
               <span>기간 · <b id="projPeriod">—</b></span>
               <span id="projTaskCount">—</span>
               <span>최종 업데이트 · <b id="updatedAt">방금 전</b></span>
             </div>
           </div>
           <div className="proj-actions">
-            <button className="btn-secondary" aria-label="필터">＋ 단위업무 추가</button>
+            <button className="btn-secondary" aria-label="필터">+ 단위업무 추가</button>
             <button className="cta" aria-label="공정 리포트 발송" id="reportBtn">리포트 발송</button>
           </div>
         </section>

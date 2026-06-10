@@ -238,7 +238,7 @@
   display: flex; gap: 16px; flex-wrap: wrap;
 }
 .wbs-root .proj-meta b { color: var(--text-1); font-weight: 600; }
-.wbs-root .proj-actions { display: flex; gap: 8px; }
+.wbs-root .proj-actions { display: none; gap: 8px; }
 
 /* ── KPI cards ────────────────────────────────────────────── */
 .wbs-root .kpis {
