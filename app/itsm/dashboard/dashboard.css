@@ -169,6 +169,17 @@
   border: 2px solid var(--bg-1);
   flex: none;
 }
+.wbs-root .avatar-stack .av {
+  padding: 0;
+  cursor: pointer;
+  font-family: inherit;
+  transition: transform .12s ease, box-shadow .12s ease;
+}
+.wbs-root .avatar-stack .av:hover { transform: translateY(-2px); }
+.wbs-root .avatar-stack .av.selected {
+  border-color: var(--accent-2);
+  box-shadow: 0 0 0 2px var(--accent-2);
+}
 .wbs-root .av-1 { background: linear-gradient(135deg,#7C3AED,#A78BFA); }
 .wbs-root .av-2 { background: linear-gradient(135deg,#60A5FA,#38BDF8); }
 .wbs-root .av-3 { background: linear-gradient(135deg,#F472B6,#EC4899); }
@@ -304,6 +315,23 @@
   margin-bottom: 12px;
   flex-wrap: wrap;
 }
+.wbs-root .proj-select {
+  appearance: none;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 8px 32px 8px 12px;
+  color: var(--text-0);
+  font-size: 13px;
+  font-weight: 600;
+  max-width: 260px;
+  cursor: pointer;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%238488A0' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><polyline points='6 9 12 15 18 9'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  outline: none;
+}
+.wbs-root .proj-select:focus { border-color: var(--accent-2); box-shadow: 0 0 0 3px rgba(96,165,250,.18); }
 .wbs-root .seg {
   display: inline-flex;
   background: var(--bg-2);

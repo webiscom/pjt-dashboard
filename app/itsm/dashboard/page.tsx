@@ -6,6 +6,11 @@ export const metadata: Metadata = {
   description: 'WBS 대시보드',
 };
 
-export default function DashboardPage() {
-  return <WBSDashboard />;
+export default async function DashboardPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ proj?: string }>;
+}) {
+  const { proj } = await searchParams;
+  return <WBSDashboard projNo={proj || '202501-007'} />;
 }

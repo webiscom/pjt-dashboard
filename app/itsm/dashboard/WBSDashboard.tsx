@@ -1,8 +1,14 @@
 'use client';
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import './dashboard.css';
-import { DS_DATA } from './dsData';
+
+interface ProjectOption {
+  PROJECT_SN: string;
+  PROJECT_NM: string;
+  PROJECT_PM_NM: string;
+  PROJECT_MNG_NM: string;
+}
 
 interface RawTask {
   ID: string;
@@ -11,7 +17,7 @@ interface RawTask {
   END_DATE: string;
   DURATION: string;
   PROGRESS: string;
-  PARENT: string;
+  PARENT: string | null;
   USER: string;
   ACTL_BGNG_YMD: string | null;
   ACTL_CMPTN_YMD: string | null;
@@ -40,6 +46,11 @@ interface Task {
 function parseYYYYMMDD(s: string | null | undefined): Date | null {
   if (!s) return null;
   const [y, m, d] = s.split('-').map(Number);
+  return (y && m && d) ? new Date(y, m - 1, d) : null;
+}
+function parseDDMMYYYY(s: string | null | undefined): Date | null {
+  if (!s) return null;
+  const [d, m, y] = s.split('-').map(Number);
   return (y && m && d) ? new Date(y, m - 1, d) : null;
 }
 function dayDiff(a: Date, b: Date): number {
@@ -75,9 +86,9 @@ function buildTree(items: RawTask[]): RawTask[] {
 }
 
 function mapTask(raw: RawTask, today: Date): Task {
-  const ps = parseYYYYMMDD(raw.START_DATE);
+  const ps = parseDDMMYYYY(raw.START_DATE);
   const dur = Math.max(1, parseInt(raw.DURATION) || 1);
-  const pe = parseYYYYMMDD(raw.END_DATE) || (ps ? new Date(ps.getTime() + (dur - 1) * 86400000) : null);
+  const pe = parseDDMMYYYY(raw.END_DATE) || (ps ? new Date(ps.getTime() + (dur - 1) * 86400000) : null);
   const as = parseYYYYMMDD(raw.ACTL_BGNG_YMD);
   const ae = parseYYYYMMDD(raw.ACTL_CMPTN_YMD);
   const progress = parseFloat(raw.PROGRESS || '0');
@@ -135,241 +146,176 @@ function buildBars(t: Task, PROJECT_START: Date, TODAY: Date, TOTAL_DAYS: number
   return html;
 }
 
-export default function WBSDashboard() {
-  const rootRef = useRef<HTMLDivElement>(null);
+// ── DOM helpers shared between effects ──────────────────────────
+function applyStickyOffsets(root: HTMLElement) {
+  const wbsBody = root.querySelector<HTMLElement>('#wbsBody');
+  const wbsHead = root.querySelector<HTMLElement>('#wbsHead');
+  if (!wbsBody || !wbsHead) return;
+  const firstRow = wbsBody.querySelector('tr');
+  if (!firstRow) return;
+  const offsets: Record<string, number> = {};
+  let left = 0;
+  firstRow.querySelectorAll<HTMLElement>('td.sticky-l').forEach(td => {
+    offsets[td.dataset.col!] = left;
+    left += td.getBoundingClientRect().width;
+  });
+  wbsBody.querySelectorAll('tr').forEach(tr => {
+    tr.querySelectorAll<HTMLElement>('td.sticky-l').forEach(td => {
+      if (offsets[td.dataset.col!] !== undefined) td.style.left = offsets[td.dataset.col!] + 'px';
+    });
+  });
+  wbsHead.querySelectorAll<HTMLElement>('th.sticky-l').forEach(th => {
+    if (offsets[th.dataset.col!] !== undefined) th.style.left = offsets[th.dataset.col!] + 'px';
+  });
+}
 
+function matchesFilter(t: Task, filter: string): boolean {
+  switch (filter) {
+    case 'active': return t.unit > 0 && t.unit < 100;
+    case 'delay': return t.delay > 0;
+    case 'done': return t.unit >= 100;
+    default: return true;
+  }
+}
+
+function applyFilters(root: HTMLElement, tasks: Task[], filter: string, query: string, member: string | null) {
+  const wbsBody = root.querySelector<HTMLElement>('#wbsBody');
+  if (!wbsBody) return;
+  wbsBody.querySelectorAll<HTMLElement>('tr').forEach(tr => {
+    const t = tasks[+tr.dataset.idx!];
+    if (!t) return;
+    tr.style.display = (
+      matchesFilter(t, filter)
+      && (!member || t.owner === member)
+      && (!query || t.feature.toLowerCase().includes(query) || t.owner.toLowerCase().includes(query))
+    ) ? '' : 'none';
+  });
+}
+
+// Empty out the WBS table and reset KPI/period/count to their zero state —
+// used when there is no project (and therefore no task data) to display.
+function clearTaskDisplay(root: HTMLElement) {
+  const wbsCols = root.querySelector<HTMLElement>('#wbsCols');
+  const wbsHead = root.querySelector<HTMLElement>('#wbsHead');
+  const wbsBody = root.querySelector<HTMLElement>('#wbsBody');
+  if (wbsCols) wbsCols.innerHTML = '';
+  if (wbsHead) wbsHead.innerHTML = '';
+  if (wbsBody) wbsBody.innerHTML = '';
+
+  const ringEl = root.querySelector<HTMLElement>('.ring');
+  if (ringEl) {
+    ringEl.style.setProperty('--p', '0');
+    const span = ringEl.querySelector('span');
+    if (span) span.textContent = '0%';
+  }
+  const kpis = root.querySelectorAll('.kpi');
+  if (kpis[0]) {
+    const v = kpis[0].querySelector('.kpi-value');
+    if (v) v.innerHTML = `0<span class="sub">%</span>`;
+  }
+  if (kpis[1]) {
+    const v = kpis[1].querySelector('.kpi-value');
+    const delta = kpis[1].querySelector('.kpi-delta');
+    if (v) v.innerHTML = `0<span class="sub"> / 0</span>`;
+    if (delta) delta.textContent = '진행 중 0 · 대기 0';
+  }
+  if (kpis[2]) {
+    const v = kpis[2].querySelector('.kpi-value');
+    const delta = kpis[2].querySelector('.kpi-delta');
+    if (v) v.innerHTML = `0<span class="sub"> MD · 100%</span>`;
+    if (delta) delta.textContent = '예측 잔여 0 MD';
+  }
+  if (kpis[3]) {
+    const v = kpis[3].querySelector('.kpi-value');
+    const delta = kpis[3].querySelector('.kpi-delta');
+    if (v) v.innerHTML = `0<span class="sub" style="color: var(--text-2);"> 건</span>`;
+    if (delta) delta.innerHTML = '지연 없음';
+  }
+  const periodEl = root.querySelector<HTMLElement>('#projPeriod');
+  if (periodEl) periodEl.textContent = '—';
+  const countEl = root.querySelector<HTMLElement>('#projTaskCount');
+  if (countEl) countEl.textContent = '업무 0건';
+}
+
+interface WBSDashboardProps {
+  projNo?: string;
+}
+
+// Raw rows from the API may carry numeric IDs/parents — normalize to strings.
+function normalizeRow(row: Record<string, unknown>): RawTask {
+  return {
+    ...row,
+    ID: String(row.ID),
+    PARENT: row.PARENT === null || row.PARENT === undefined ? null : String(row.PARENT),
+  } as RawTask;
+}
+
+export default function WBSDashboard({ projNo: initialProjNo = '' }: WBSDashboardProps) {
+  const rootRef = useRef<HTMLDivElement>(null);
+  const tasksRef = useRef<Task[]>([]);
+  const filterStateRef = useRef<{ filter: string; query: string; member: string | null }>({ filter: 'all', query: '', member: null });
+  const [selectedMember, setSelectedMember] = useState<string | null>(null);
+  const [projNo, setProjNo] = useState(initialProjNo);
+  const [projects, setProjects] = useState<ProjectOption[]>([]);
+  const [taskOwners, setTaskOwners] = useState<string[]>([]);
+
+  // Project list (loaded once) — select the first project on initial load,
+  // or clear the task display if there are no projects.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch('/api/projects');
+        if (!res.ok) throw new Error(`request failed: ${res.status}`);
+        const json = await res.json();
+        const data: ProjectOption[] = json.data || [];
+        if (cancelled) return;
+        setProjects(data);
+        if (data.length > 0) {
+          setProjNo(data[0].PROJECT_SN);
+        } else {
+          tasksRef.current = [];
+          setTaskOwners([]);
+          const root = rootRef.current;
+          if (root) clearTaskDisplay(root);
+        }
+      } catch (err) {
+        console.error('Failed to load project list:', err);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  // One-time UI wiring: filters, search, theme, menu, modal, reveal, ticker
   useEffect(() => {
     const root = rootRef.current;
     if (!root) return;
 
-    const TODAY = new Date();
-    TODAY.setHours(0, 0, 0, 0);
-
-    const raw = [...DS_DATA.data_pj].sort((a, b) => parseInt(a.ID) - parseInt(b.ID)) as RawTask[];
-    const flat = buildTree(raw);
-    const TASKS = flat.map(it => mapTask(it, TODAY));
-
-    const allDates = TASKS.flatMap(t => [t.ps, t.pe, t.as, t.ae].filter(Boolean)) as Date[];
-    if (!allDates.length) return;
-
-    let minTs = Math.min(...allDates.map(d => d.getTime()));
-    let maxTs = Math.max(...allDates.map(d => d.getTime()));
-    if (TODAY.getTime() < minTs) minTs = TODAY.getTime();
-    if (TODAY.getTime() > maxTs) maxTs = TODAY.getTime();
-
-    const PROJECT_START = new Date(minTs - 3 * 86400000);
-    const PROJECT_END = new Date(maxTs + 7 * 86400000);
-    const DAY_W = 28;
-
-    const DAYS: Date[] = [];
-    const d = new Date(PROJECT_START);
-    while (d <= PROJECT_END) { DAYS.push(new Date(d)); d.setDate(d.getDate() + 1); }
-    const TOTAL_DAYS = DAYS.length;
-
-    const MONTHS: { key: string; year: number; month: number; span: number }[] = [];
-    let cur: { key: string; year: number; month: number; span: number } | null = null;
-    DAYS.forEach(day => {
-      const key = `${day.getFullYear()}-${day.getMonth()}`;
-      if (!cur || cur.key !== key) {
-        cur = { key, year: day.getFullYear(), month: day.getMonth() + 1, span: 0 };
-        MONTHS.push(cur);
-      }
-      cur.span++;
-    });
-
-    // Build colgroup
-    const wbsCols = root.querySelector<HTMLElement>('#wbsCols');
-    const wbsHead = root.querySelector<HTMLElement>('#wbsHead');
-    const wbsBody = root.querySelector<HTMLElement>('#wbsBody');
-    if (!wbsCols || !wbsHead || !wbsBody) return;
-
-    [['c-feature'], ['c-owner'], ['c-unit'], ['c-md'], ['c-date'], ['c-date'], ['c-date'], ['c-date'], ['c-delay']].forEach(([cls]) => {
-      const c = document.createElement('col'); c.className = cls; wbsCols.appendChild(c);
-    });
-    for (let i = 0; i < TOTAL_DAYS; i++) {
-      const c = document.createElement('col'); c.className = 'c-day'; wbsCols.appendChild(c);
-    }
-
-    // Build thead
-    const tr1 = document.createElement('tr');
-    tr1.innerHTML = `
-      <th rowspan="3" class="sticky-l" data-col="0">업무명</th>
-      <th rowspan="3" class="sticky-l" data-col="1">담당자</th>
-      <th rowspan="3" class="sticky-l" data-col="2">진행률</th>
-      <th rowspan="3" class="sticky-l" data-col="3">M/D</th>
-      <th colspan="2" class="sticky-l" data-col="4">작업 예정일</th>
-      <th colspan="2" class="sticky-l" data-col="6">작업 실적일</th>
-      <th rowspan="3" class="sticky-l sticky-shadow" data-col="8">지연</th>
-      <th colspan="${TOTAL_DAYS}">전체 공정일</th>
-    `;
-    wbsHead.appendChild(tr1);
-
-    const tr2 = document.createElement('tr');
-    let r2 = `<th rowspan="2" class="sticky-l" data-col="4">시작일</th><th rowspan="2" class="sticky-l" data-col="5">종료일</th><th rowspan="2" class="sticky-l" data-col="6">시작일</th><th rowspan="2" class="sticky-l" data-col="7">종료일</th>`;
-    MONTHS.forEach(m => {
-      r2 += `<th class="month" colspan="${m.span}"><span class="y">${m.year}</span>${String(m.month).padStart(2, '0')}월</th>`;
-    });
-    tr2.innerHTML = r2;
-    wbsHead.appendChild(tr2);
-
-    const tr3 = document.createElement('tr');
-    let r3 = '';
-    DAYS.forEach((day, i) => {
-      const dow = day.getDay();
-      const cls = ['day'];
-      if (dow === 0 || dow === 6) cls.push('weekend');
-      if (i === TOTAL_DAYS - 1 || (DAYS[i + 1] && DAYS[i + 1].getDate() === 1)) cls.push('month-end');
-      r3 += `<th class="${cls.join(' ')}">${day.getDate()}</th>`;
-    });
-    tr3.innerHTML = r3;
-    wbsHead.appendChild(tr3);
-
-    // Build tbody
-    TASKS.forEach((t, idx) => {
-      const tr = document.createElement('tr');
-      tr.dataset.idx = String(idx);
-      const sc = statusClass(t);
-      let delayHtml: string;
-      if (!t.as) delayHtml = `<span class="delay-tag zero">—</span>`;
-      else if (t.delay > 0) delayHtml = `<span class="delay-tag bad">+${t.delay}일</span>`;
-      else delayHtml = `<span class="delay-tag ok">정상</span>`;
-      const padL = 8 + t.depth * 16;
-      const depthMark = t.depth > 0 ? `<span class="depth-ind">└</span>` : '';
-      tr.innerHTML = `
-        <td class="sticky-l feature-cell" data-col="0" style="padding-left:${padL}px">${depthMark}${t.feature}</td>
-        <td class="sticky-l" data-col="1">${t.owner !== '—' ? `<span class="owner"><span class="av ${t.ownerAv}">${t.owner.slice(-2)}</span>${t.owner}</span>` : `<span class="owner">—</span>`}</td>
-        <td class="sticky-l" data-col="2"><div class="progress-wrap"><div class="progress ${sc}" style="--p:${t.unit}"></div><span>${t.unit}%</span></div></td>
-        <td class="sticky-l num" data-col="3">${t.md}</td>
-        <td class="sticky-l date" data-col="4">${fmt(t.ps)}</td>
-        <td class="sticky-l date" data-col="5">${fmt(t.pe)}</td>
-        <td class="sticky-l date" data-col="6">${fmt(t.as)}</td>
-        <td class="sticky-l date" data-col="7">${fmt(t.ae)}</td>
-        <td class="sticky-l sticky-shadow delay" data-col="8">${delayHtml}</td>
-        <td class="timeline" colspan="${TOTAL_DAYS}"><div class="bars">${buildBars(t, PROJECT_START, TODAY, TOTAL_DAYS, DAY_W)}</div></td>
-      `;
-      wbsBody.appendChild(tr);
-    });
-
-    // Today line
-    const todayIdx = dayDiff(PROJECT_START, TODAY);
-    if (todayIdx >= 0 && todayIdx < TOTAL_DAYS) {
-      root.querySelectorAll('.timeline .bars').forEach(b => {
-        const l = document.createElement('div');
-        l.className = 'today-line';
-        (l as HTMLElement).style.left = (todayIdx * DAY_W + DAY_W / 2) + 'px';
-        b.appendChild(l);
-      });
-    }
-
-    // KPI update
-    const total = TASKS.length;
-    const done = TASKS.filter(t => t.unit >= 100).length;
-    const active = TASKS.filter(t => t.unit > 0 && t.unit < 100).length;
-    const waiting = TASKS.filter(t => t.unit === 0).length;
-    const delayed = TASKS.filter(t => t.delay > 0).length;
-    const avgDelay = delayed ? Math.round(TASKS.filter(t => t.delay > 0).reduce((s, t) => s + t.delay, 0) / delayed * 10) / 10 : 0;
-    const avgProgress = total ? Math.round(TASKS.reduce((s, t) => s + t.unit, 0) / total) : 0;
-
-    const ringEl = root.querySelector<HTMLElement>('.ring');
-    if (ringEl) {
-      ringEl.style.setProperty('--p', String(avgProgress));
-      const span = ringEl.querySelector('span');
-      if (span) span.textContent = `${avgProgress}%`;
-    }
-    const kpis = root.querySelectorAll('.kpi');
-    if (kpis[0]) {
-      const v = kpis[0].querySelector('.kpi-value');
-      if (v) v.innerHTML = `${avgProgress}<span class="sub">%</span>`;
-    }
-    if (kpis[1]) {
-      const v = kpis[1].querySelector('.kpi-value');
-      const delta = kpis[1].querySelector('.kpi-delta');
-      if (v) v.innerHTML = `${done}<span class="sub"> / ${total}</span>`;
-      if (delta) delta.textContent = `진행 중 ${active} · 대기 ${waiting}`;
-    }
-    if (kpis[3]) {
-      const v = kpis[3].querySelector('.kpi-value');
-      const delta = kpis[3].querySelector('.kpi-delta');
-      if (v) v.innerHTML = `${delayed}<span class="sub" style="color: var(--text-2);"> 건</span>`;
-      if (delta && delayed > 0) delta.innerHTML = `<span class="down">평균 +${avgDelay} 일</span> &nbsp;즉시 대응 필요`;
-    }
-
-    // Project period
-    const periodEl = root.querySelector<HTMLElement>('#projPeriod');
-    if (periodEl) {
-      const s = new Date(minTs), e = new Date(maxTs);
-      periodEl.textContent = `${s.getFullYear()}.${String(s.getMonth() + 1).padStart(2, '0')}.${String(s.getDate()).padStart(2, '0')} ~ ${e.getFullYear()}.${String(e.getMonth() + 1).padStart(2, '0')}.${String(e.getDate()).padStart(2, '0')}`;
-    }
-    const countEl = root.querySelector<HTMLElement>('#projTaskCount');
-    if (countEl) countEl.textContent = `업무 ${TASKS.length}건`;
-
-    // Sticky offsets
-    function applyStickyOffsets() {
-      if (!wbsBody || !wbsHead) return;
-      const firstRow = wbsBody.querySelector('tr');
-      if (!firstRow) return;
-      const offsets: Record<string, number> = {};
-      let left = 0;
-      firstRow.querySelectorAll<HTMLElement>('td.sticky-l').forEach(td => {
-        offsets[td.dataset.col!] = left;
-        left += td.getBoundingClientRect().width;
-      });
-      wbsBody.querySelectorAll('tr').forEach(tr => {
-        tr.querySelectorAll<HTMLElement>('td.sticky-l').forEach(td => {
-          if (offsets[td.dataset.col!] !== undefined) td.style.left = offsets[td.dataset.col!] + 'px';
-        });
-      });
-      wbsHead.querySelectorAll<HTMLElement>('th.sticky-l').forEach(th => {
-        if (offsets[th.dataset.col!] !== undefined) th.style.left = offsets[th.dataset.col!] + 'px';
-      });
-    }
-
-    requestAnimationFrame(() => {
-      applyStickyOffsets();
-      const idx = dayDiff(PROJECT_START, TODAY);
-      const scroll = root!.querySelector<HTMLElement>('#wbsScroll');
-      if (idx > 5 && scroll) {
-        const stickyWidth = [...(wbsBody!.querySelector('tr')?.querySelectorAll('td.sticky-l') || [])]
-          .reduce((s, td) => s + td.getBoundingClientRect().width, 0);
-        scroll.scrollLeft = Math.max(0, idx * DAY_W - scroll.clientWidth / 2 + stickyWidth / 2);
-      }
-    });
-    window.addEventListener('resize', applyStickyOffsets);
+    const handleResize = () => applyStickyOffsets(root);
+    window.addEventListener('resize', handleResize);
 
     // Filters
-    let currentFilter = 'all';
-    let currentQuery = '';
-    function matchesFilter(t: Task) {
-      switch (currentFilter) {
-        case 'active': return t.unit > 0 && t.unit < 100;
-        case 'delay': return t.delay > 0;
-        case 'done': return t.unit >= 100;
-        default: return true;
-      }
-    }
-    function applyFilters() {
-      if (!wbsBody) return;
-      wbsBody.querySelectorAll<HTMLElement>('tr').forEach(tr => {
-        const t = TASKS[+tr.dataset.idx!];
-        if (!t) return;
-        tr.style.display = (matchesFilter(t) && (!currentQuery || t.feature.toLowerCase().includes(currentQuery) || t.owner.toLowerCase().includes(currentQuery))) ? '' : 'none';
-      });
-    }
     root.querySelectorAll('.seg [data-filter]').forEach(btn => {
       btn.addEventListener('click', () => {
         root.querySelectorAll('.seg [data-filter]').forEach(b => { b.classList.remove('on'); b.setAttribute('aria-selected', 'false'); });
         btn.classList.add('on'); btn.setAttribute('aria-selected', 'true');
-        currentFilter = (btn as HTMLElement).dataset.filter!;
-        applyFilters();
+        filterStateRef.current.filter = (btn as HTMLElement).dataset.filter!;
+        applyFilters(root, tasksRef.current, filterStateRef.current.filter, filterStateRef.current.query, filterStateRef.current.member);
       });
     });
     const searchInput = root.querySelector<HTMLInputElement>('.search');
     if (searchInput) {
       searchInput.addEventListener('keydown', e => {
-        if (e.key === 'Enter') { currentQuery = searchInput.value.trim().toLowerCase(); applyFilters(); }
+        if (e.key === 'Enter') {
+          filterStateRef.current.query = searchInput.value.trim().toLowerCase();
+          applyFilters(root, tasksRef.current, filterStateRef.current.filter, filterStateRef.current.query, filterStateRef.current.member);
+        }
       });
       searchInput.addEventListener('search', () => {
-        if (!searchInput.value) { currentQuery = ''; applyFilters(); }
+        if (!searchInput.value) {
+          filterStateRef.current.query = '';
+          applyFilters(root, tasksRef.current, filterStateRef.current.filter, filterStateRef.current.query, filterStateRef.current.member);
+        }
       });
     }
 
@@ -446,12 +392,259 @@ export default function WBSDashboard() {
     }, 30000);
 
     return () => {
-      window.removeEventListener('resize', applyStickyOffsets);
+      window.removeEventListener('resize', handleResize);
       document.removeEventListener('keydown', handleKeydown);
       io.disconnect();
       clearInterval(ticker);
     };
   }, []);
+
+  // Data fetch + table build (re-runs whenever the selected project changes)
+  useEffect(() => {
+    const root = rootRef.current;
+    if (!root) return;
+
+    let cancelled = false;
+
+    // Reset previously displayed data immediately so stale rows aren't shown
+    // while the new project's data is being fetched.
+    tasksRef.current = [];
+    {
+      const wbsCols = root.querySelector<HTMLElement>('#wbsCols');
+      const wbsHead = root.querySelector<HTMLElement>('#wbsHead');
+      const wbsBody = root.querySelector<HTMLElement>('#wbsBody');
+      if (wbsCols) wbsCols.innerHTML = '';
+      if (wbsHead) wbsHead.innerHTML = '';
+      if (wbsBody) wbsBody.innerHTML = '';
+    }
+
+    (async () => {
+      const TODAY = new Date();
+      TODAY.setHours(0, 0, 0, 0);
+
+      let rawData: RawTask[] = [];
+      try {
+        const res = await fetch(`/api/gantt-tasks?projNo=${encodeURIComponent(projNo)}`);
+        if (!res.ok) throw new Error(`request failed: ${res.status}`);
+        const json = await res.json();
+        rawData = (json.data_pj || []).map(normalizeRow);
+      } catch (err) {
+        console.error('Failed to load gantt tasks:', err);
+        return;
+      }
+      if (cancelled || !rootRef.current) return;
+
+      const raw = [...rawData].sort((a, b) => parseInt(a.ID) - parseInt(b.ID));
+      const flat = buildTree(raw);
+      const TASKS = flat.map(it => mapTask(it, TODAY));
+      tasksRef.current = TASKS;
+      setTaskOwners(Array.from(new Set(TASKS.map(t => t.owner).filter(o => o && o !== '—'))));
+
+      const wbsCols = root.querySelector<HTMLElement>('#wbsCols');
+      const wbsHead = root.querySelector<HTMLElement>('#wbsHead');
+      const wbsBody = root.querySelector<HTMLElement>('#wbsBody');
+      if (!wbsCols || !wbsHead || !wbsBody) return;
+
+      // KPI update — runs for every project (including ones with no tasks),
+      // so stale numbers from the previously selected project never linger.
+      const total = TASKS.length;
+      const done = TASKS.filter(t => t.unit >= 100).length;
+      const active = TASKS.filter(t => t.unit > 0 && t.unit < 100).length;
+      const waiting = TASKS.filter(t => t.unit === 0).length;
+      const delayed = TASKS.filter(t => t.delay > 0).length;
+      const avgDelay = delayed ? Math.round(TASKS.filter(t => t.delay > 0).reduce((s, t) => s + t.delay, 0) / delayed * 10) / 10 : 0;
+      const avgProgress = total ? Math.round(TASKS.reduce((s, t) => s + t.unit, 0) / total) : 0;
+
+      const ringEl = root.querySelector<HTMLElement>('.ring');
+      if (ringEl) {
+        ringEl.style.setProperty('--p', String(avgProgress));
+        const span = ringEl.querySelector('span');
+        if (span) span.textContent = `${avgProgress}%`;
+      }
+      const kpis = root.querySelectorAll('.kpi');
+      if (kpis[0]) {
+        const v = kpis[0].querySelector('.kpi-value');
+        if (v) v.innerHTML = `${avgProgress}<span class="sub">%</span>`;
+      }
+      if (kpis[1]) {
+        const v = kpis[1].querySelector('.kpi-value');
+        const delta = kpis[1].querySelector('.kpi-delta');
+        if (v) v.innerHTML = `${done}<span class="sub"> / ${total}</span>`;
+        if (delta) delta.textContent = `진행 중 ${active} · 대기 ${waiting}`;
+      }
+      if (kpis[2]) {
+        const totalMD = TASKS.reduce((s, t) => s + t.md, 0);
+        const remainingMD = Math.round(TASKS.reduce((s, t) => s + t.md * (1 - t.unit / 100), 0));
+        const v = kpis[2].querySelector('.kpi-value');
+        const delta = kpis[2].querySelector('.kpi-delta');
+        if (v) v.innerHTML = `${totalMD}<span class="sub"> MD · 100%</span>`;
+        if (delta) delta.textContent = `예측 잔여 ${remainingMD} MD`;
+      }
+      if (kpis[3]) {
+        const v = kpis[3].querySelector('.kpi-value');
+        const delta = kpis[3].querySelector('.kpi-delta');
+        if (v) v.innerHTML = `${delayed}<span class="sub" style="color: var(--text-2);"> 건</span>`;
+        if (delta) delta.innerHTML = delayed > 0 ? `<span class="down">평균 +${avgDelay} 일</span> &nbsp;즉시 대응 필요` : '지연 없음';
+      }
+
+      // Reset filter/search to defaults so the new project's list shows in full
+      filterStateRef.current.filter = 'all';
+      filterStateRef.current.query = '';
+      filterStateRef.current.member = null;
+      setSelectedMember(null);
+      root.querySelectorAll('.seg [data-filter]').forEach(b => {
+        const isAll = (b as HTMLElement).dataset.filter === 'all';
+        b.classList.toggle('on', isAll);
+        b.setAttribute('aria-selected', String(isAll));
+      });
+      const searchInput = root.querySelector<HTMLInputElement>('.search');
+      if (searchInput) searchInput.value = '';
+
+      const countEl = root.querySelector<HTMLElement>('#projTaskCount');
+      if (countEl) countEl.textContent = `업무 ${total}건`;
+
+      const allDates = TASKS.flatMap(t => [t.ps, t.pe, t.as, t.ae].filter(Boolean)) as Date[];
+      const periodEl = root.querySelector<HTMLElement>('#projPeriod');
+      if (!allDates.length) {
+        if (periodEl) periodEl.textContent = '—';
+        applyFilters(root, TASKS, filterStateRef.current.filter, filterStateRef.current.query, filterStateRef.current.member);
+        return;
+      }
+
+      let minTs = Math.min(...allDates.map(d => d.getTime()));
+      let maxTs = Math.max(...allDates.map(d => d.getTime()));
+      if (TODAY.getTime() < minTs) minTs = TODAY.getTime();
+      if (TODAY.getTime() > maxTs) maxTs = TODAY.getTime();
+
+      const PROJECT_START = new Date(minTs - 3 * 86400000);
+      const PROJECT_END = new Date(maxTs + 7 * 86400000);
+      const DAY_W = 28;
+
+      const DAYS: Date[] = [];
+      const d = new Date(PROJECT_START);
+      while (d <= PROJECT_END) { DAYS.push(new Date(d)); d.setDate(d.getDate() + 1); }
+      const TOTAL_DAYS = DAYS.length;
+
+      const MONTHS: { key: string; year: number; month: number; span: number }[] = [];
+      let cur: { key: string; year: number; month: number; span: number } | null = null;
+      DAYS.forEach(day => {
+        const key = `${day.getFullYear()}-${day.getMonth()}`;
+        if (!cur || cur.key !== key) {
+          cur = { key, year: day.getFullYear(), month: day.getMonth() + 1, span: 0 };
+          MONTHS.push(cur);
+        }
+        cur.span++;
+      });
+
+      // Build colgroup
+      [['c-feature'], ['c-owner'], ['c-unit'], ['c-md'], ['c-date'], ['c-date'], ['c-date'], ['c-date'], ['c-delay']].forEach(([cls]) => {
+        const c = document.createElement('col'); c.className = cls; wbsCols.appendChild(c);
+      });
+      for (let i = 0; i < TOTAL_DAYS; i++) {
+        const c = document.createElement('col'); c.className = 'c-day'; wbsCols.appendChild(c);
+      }
+
+      // Build thead
+      const tr1 = document.createElement('tr');
+      tr1.innerHTML = `
+        <th rowspan="3" class="sticky-l" data-col="0">업무명</th>
+        <th rowspan="3" class="sticky-l" data-col="1">담당자</th>
+        <th rowspan="3" class="sticky-l" data-col="2">진행률</th>
+        <th rowspan="3" class="sticky-l" data-col="3">M/D</th>
+        <th colspan="2" class="sticky-l" data-col="4">작업 예정일</th>
+        <th colspan="2" class="sticky-l" data-col="6">작업 실적일</th>
+        <th rowspan="3" class="sticky-l sticky-shadow" data-col="8">지연</th>
+        <th colspan="${TOTAL_DAYS}">전체 공정일</th>
+      `;
+      wbsHead.appendChild(tr1);
+
+      const tr2 = document.createElement('tr');
+      let r2 = `<th rowspan="2" class="sticky-l" data-col="4">시작일</th><th rowspan="2" class="sticky-l" data-col="5">종료일</th><th rowspan="2" class="sticky-l" data-col="6">시작일</th><th rowspan="2" class="sticky-l" data-col="7">종료일</th>`;
+      MONTHS.forEach(m => {
+        r2 += `<th class="month" colspan="${m.span}"><span class="y">${m.year}</span>${String(m.month).padStart(2, '0')}월</th>`;
+      });
+      tr2.innerHTML = r2;
+      wbsHead.appendChild(tr2);
+
+      const tr3 = document.createElement('tr');
+      let r3 = '';
+      DAYS.forEach((day, i) => {
+        const dow = day.getDay();
+        const cls = ['day'];
+        if (dow === 0 || dow === 6) cls.push('weekend');
+        if (i === TOTAL_DAYS - 1 || (DAYS[i + 1] && DAYS[i + 1].getDate() === 1)) cls.push('month-end');
+        r3 += `<th class="${cls.join(' ')}">${day.getDate()}</th>`;
+      });
+      tr3.innerHTML = r3;
+      wbsHead.appendChild(tr3);
+
+      // Build tbody
+      TASKS.forEach((t, idx) => {
+        const tr = document.createElement('tr');
+        tr.dataset.idx = String(idx);
+        const sc = statusClass(t);
+        let delayHtml: string;
+        if (!t.as) delayHtml = `<span class="delay-tag zero">—</span>`;
+        else if (t.delay > 0) delayHtml = `<span class="delay-tag bad">+${t.delay}일</span>`;
+        else delayHtml = `<span class="delay-tag ok">정상</span>`;
+        const padL = 8 + t.depth * 16;
+        const depthMark = t.depth > 0 ? `<span class="depth-ind">└</span>` : '';
+        tr.innerHTML = `
+          <td class="sticky-l feature-cell" data-col="0" style="padding-left:${padL}px">${depthMark}${t.feature}</td>
+          <td class="sticky-l" data-col="1">${t.owner !== '—' ? `<span class="owner"><span class="av ${t.ownerAv}">${t.owner.slice(-2)}</span>${t.owner}</span>` : `<span class="owner">—</span>`}</td>
+          <td class="sticky-l" data-col="2"><div class="progress-wrap"><div class="progress ${sc}" style="--p:${t.unit}"></div><span>${t.unit}%</span></div></td>
+          <td class="sticky-l num" data-col="3">${t.md}</td>
+          <td class="sticky-l date" data-col="4">${fmt(t.ps)}</td>
+          <td class="sticky-l date" data-col="5">${fmt(t.pe)}</td>
+          <td class="sticky-l date" data-col="6">${fmt(t.as)}</td>
+          <td class="sticky-l date" data-col="7">${fmt(t.ae)}</td>
+          <td class="sticky-l sticky-shadow delay" data-col="8">${delayHtml}</td>
+          <td class="timeline" colspan="${TOTAL_DAYS}"><div class="bars">${buildBars(t, PROJECT_START, TODAY, TOTAL_DAYS, DAY_W)}</div></td>
+        `;
+        wbsBody.appendChild(tr);
+      });
+
+      // Today line
+      const todayIdx = dayDiff(PROJECT_START, TODAY);
+      if (todayIdx >= 0 && todayIdx < TOTAL_DAYS) {
+        root.querySelectorAll('.timeline .bars').forEach(b => {
+          const l = document.createElement('div');
+          l.className = 'today-line';
+          (l as HTMLElement).style.left = (todayIdx * DAY_W + DAY_W / 2) + 'px';
+          b.appendChild(l);
+        });
+      }
+
+      // Project period
+      if (periodEl) {
+        const s = new Date(minTs), e = new Date(maxTs);
+        periodEl.textContent = `${s.getFullYear()}.${String(s.getMonth() + 1).padStart(2, '0')}.${String(s.getDate()).padStart(2, '0')} ~ ${e.getFullYear()}.${String(e.getMonth() + 1).padStart(2, '0')}.${String(e.getDate()).padStart(2, '0')}`;
+      }
+
+      applyFilters(root, TASKS, filterStateRef.current.filter, filterStateRef.current.query, filterStateRef.current.member);
+
+      requestAnimationFrame(() => {
+        applyStickyOffsets(root);
+        const idx = dayDiff(PROJECT_START, TODAY);
+        const scroll = root.querySelector<HTMLElement>('#wbsScroll');
+        if (idx > 5 && scroll) {
+          const stickyWidth = [...(wbsBody.querySelector('tr')?.querySelectorAll('td.sticky-l') || [])]
+            .reduce((s, td) => s + td.getBoundingClientRect().width, 0);
+          scroll.scrollLeft = Math.max(0, idx * DAY_W - scroll.clientWidth / 2 + stickyWidth / 2);
+        }
+      });
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [projNo]);
+
+  const selectedProject = projects.find(p => p.PROJECT_SN === projNo);
+  const members = Array.from(new Set([
+    ...(selectedProject ? [selectedProject.PROJECT_PM_NM, selectedProject.PROJECT_MNG_NM] : []),
+    ...taskOwners,
+  ].filter(Boolean)));
 
   return (
     <div className="wbs-root" ref={rootRef} data-theme="dark">
@@ -463,14 +656,6 @@ export default function WBSDashboard() {
             <a href="/"><span>WBS<span className="brand-sub"></span></span></a>
           </div>
           <div className="top-right">
-            <span className="pill"><span className="dot"></span>참여자</span>
-            <div className="avatar-stack" aria-label="프로젝트 멤버">
-              <span className="av av-1">KJ</span>
-              <span className="av av-2">PM</span>
-              <span className="av av-3">LS</span>
-              <span className="av av-4">CW</span>
-              <span className="av av-5">+3</span>
-            </div>
             <button className="icon-btn" id="themeToggle" aria-label="테마 전환" title="테마 전환">
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                 <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
@@ -520,8 +705,8 @@ export default function WBSDashboard() {
           </article>
           <article className="kpi">
             <div className="kpi-label">총 M/D · 가중치 합</div>
-            <div className="kpi-value">114<span className="sub"> MD · 100%</span></div>
-            <div className="kpi-delta">예측 잔여 60 MD</div>
+            <div className="kpi-value">0<span className="sub"> MD · 100%</span></div>
+            <div className="kpi-delta">예측 잔여 0 MD</div>
           </article>
           <article className="kpi">
             <div className="kpi-label">지연 단위업무</div>
@@ -532,11 +717,49 @@ export default function WBSDashboard() {
 
         {/* ── Toolbar ── */}
         <div className="toolbar reveal" role="toolbar" aria-label="공정표 필터">
+          <select
+            className="proj-select"
+            aria-label="프로젝트 선택"
+            value={projNo}
+            onChange={e => setProjNo(e.target.value)}
+          >
+            {!projects.some(p => p.PROJECT_SN === projNo) && (
+              <option value={projNo}>{projNo}</option>
+            )}
+            {projects.map(p => (
+              <option key={p.PROJECT_SN} value={p.PROJECT_SN}>{p.PROJECT_NM}</option>
+            ))}
+          </select>
           <div className="seg" role="tablist">
             <button className="on" role="tab" aria-selected="true" data-filter="all">전체</button>
             <button role="tab" aria-selected="false" data-filter="active">진행 중</button>
             <button role="tab" aria-selected="false" data-filter="delay">지연</button>
             <button role="tab" aria-selected="false" data-filter="done">완료</button>
+          </div>
+          <span className="pill"><span className="dot"></span>팀원</span>
+          <div className="avatar-stack" aria-label="프로젝트 멤버">
+            {members.length > 0 ? (
+              members.map(name => (
+                <button
+                  key={name}
+                  type="button"
+                  className={`av ${nameToAv(name)}${selectedMember === name ? ' selected' : ''}`}
+                  title={name}
+                  aria-pressed={selectedMember === name}
+                  onClick={() => {
+                    const next = selectedMember === name ? null : name;
+                    setSelectedMember(next);
+                    filterStateRef.current.member = next;
+                    const root = rootRef.current;
+                    if (root) applyFilters(root, tasksRef.current, filterStateRef.current.filter, filterStateRef.current.query, next);
+                  }}
+                >
+                  {name.slice(-2)}
+                </button>
+              ))
+            ) : (
+              <span className="av av-1">—</span>
+            )}
           </div>
           <input className="search" type="search" placeholder="기능 · 담당자 · 산출물 검색" aria-label="공정표 검색" />
           <div className="toolbar-right">
