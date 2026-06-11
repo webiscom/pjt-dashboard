@@ -96,7 +96,7 @@ function mapTask(raw: RawTask, today: Date): Task {
   let delay = 0;
   if (pe) {
     if (ae && ae > pe) delay = dayDiff(pe, ae);
-    else if (!ae && as && today > pe) delay = dayDiff(pe, today);
+    else if (!ae && unit < 100 && today > pe) delay = dayDiff(pe, today);
   }
   return {
     id: raw.ID,
@@ -525,6 +525,13 @@ export default function WBSDashboard({ projNo: initialProjNo = '' }: WBSDashboar
       while (d <= PROJECT_END) { DAYS.push(new Date(d)); d.setDate(d.getDate() + 1); }
       const TOTAL_DAYS = DAYS.length;
 
+      // table-layout: fixed only honors <col> widths if the table itself has a
+      // definite width — otherwise the first day column gets stretched to fit
+      // the "YYYY MM월" month header text, shifting every bar ~2 days early.
+      const FIXED_COLS_WIDTH = 200 + 110 + 120 + 50 + 80 * 4 + 65;
+      const wbsTable = root.querySelector<HTMLTableElement>('#wbsTable');
+      if (wbsTable) wbsTable.style.width = `${FIXED_COLS_WIDTH + TOTAL_DAYS * DAY_W}px`;
+
       const MONTHS: { key: string; year: number; month: number; span: number }[] = [];
       let cur: { key: string; year: number; month: number; span: number } | null = null;
       DAYS.forEach(day => {
@@ -606,6 +613,7 @@ export default function WBSDashboard({ projNo: initialProjNo = '' }: WBSDashboar
 
       // Today line
       const todayIdx = dayDiff(PROJECT_START, TODAY);
+      
       if (todayIdx >= 0 && todayIdx < TOTAL_DAYS) {
         root.querySelectorAll('.timeline .bars').forEach(b => {
           const l = document.createElement('div');
